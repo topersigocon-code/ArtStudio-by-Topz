@@ -1,67 +1,85 @@
-name: Unpack Update and Build APK
+name: ArtStudio by Topz - Unpack and Build
 
 on:
   push:
     paths:
-      - 'update.zip'
+      - 'updates/*.zip'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: artstudio-build
+  cancel-in-progress: false
+
 jobs:
-  unpack-build:
+  build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Unpack application update
+        shell: bash
+        run: |
+          ZIP=$(ls -t updates/*.zip 2>/dev/null | head -n 1 || true)
+
+          if [ -z "$ZIP" ]; then
+            echo "No update ZIP found. Building current project."
+          else
+            mkdir -p /tmp/artstudio-update
+            unzip -q "$ZIP" -d /tmp/artstudio-update
+
+            SRC=/tmp/artstudio-update
+
+            if [ "$(find "$SRC" -mindepth 1 -maxdepth 1 | wc -l)" = "1" ]; then
+              ITEM=$(find "$SRC" -mindepth 1 -maxdepth 1)
+              if [ -d "$ITEM" ]; then
+                SRC="$ITEM"
+              fi
+            fi
+
+            if [ ! -f "$SRC/settings.gradle" ] && [ ! -f "$SRC/settings.gradle.kts" ]; then
+              echo "::error::Gradle settings file not found in update ZIP."
+              exit 1
+            fi
+
+            rsync -a \
+              --exclude='.git/' \
+              --exclude='.github/' \
+              --exclude='updates/' \
+              "$SRC/" ./
+
+            git add -A -- ':!.github/workflows/unpack.yml' ':!updates/*.zip'
+
+            if ! git diff --cached --quiet; then
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git commit -m "Apply ArtStudio application update"
+              git push
+            else
+              echo "No application changes to commit."
+            fi
+          fi
+
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.9'
 
-      - name: Unpack update.zip
-        if: hashFiles('update.zip') != ''
-        run: |
-          python3 - <<'PY'
-          import zipfile
-          from pathlib import Path
-          z = zipfile.ZipFile('update.zip')
-          for item in z.infolist():
-              p = Path(item.filename)
-              if p.is_absolute() or '..' in p.parts:
-                  raise SystemExit(f'Unsafe ZIP path: {item.filename}')
-          z.extractall('.')
-          PY
-
-            - name: Commit updated source files
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add -A
-          git reset -- .github/workflows/unpack.yml update.zip
-
-          if ! git diff --cached --quiet; then
-            git commit -m "Apply application update"
-            git push
-          else
-            echo "No source changes to commit"
-          fi
-
-      - name: Build debug APK
+      - name: Build APK
         run: gradle assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ArtStudio-by-Topz-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          path: app/build/outputs/apk/debug/*.apk
