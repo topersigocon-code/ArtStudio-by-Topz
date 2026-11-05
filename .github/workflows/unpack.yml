@@ -41,13 +41,20 @@ jobs:
           z.extractall('.')
           PY
 
-      - name: Commit updated source files
+            - name: Commit updated source files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add -A
-          git commit -m "Apply application update" || echo "No source changes to commit"
-          git push
+          git reset -- .github/workflows/unpack.yml update.zip
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Apply application update"
+            git push
+          else
+            echo "No source changes to commit"
+          fi
 
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
